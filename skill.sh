@@ -49,17 +49,18 @@ remove_active_line() {
 list_skills() {
   local active
   active=$(cat "$ACTIVE_FILE")
-  for link in "$SKILLS_DIR"/*/; do
-    [[ ! -d "$link" ]] && continue
+  for entry in "$SKILLS_DIR"/*; do
+    [[ ! -d "$entry" && ! -L "$entry" ]] && continue
     local name
-    name=$(basename "$link")
+    name=$(basename "$entry")
     local marker="  "
     if echo "$active" | grep -qxF -- "$name"; then
       marker="● "
     fi
     local target
-    target=$(readlink "${link%/}" 2>/dev/null || echo "(dir)")
+    target=$(readlink "$entry" 2>/dev/null || echo "(dir)")
     target="${target/#$HOME/~}"
+    [[ -e "$entry" ]] || target="$target  (BROKEN)"
     printf "%s%-28s %s\n" "$marker" "$name" "$target"
   done
 }
@@ -103,9 +104,18 @@ add_skill() {
 
   local name
   name=$(basename "$abs_path")
-  if [[ -e "$SKILLS_DIR/$name" ]]; then
-    echo "Already in pool: $name"
-    return 0
+  if [[ -e "$SKILLS_DIR/$name" || -L "$SKILLS_DIR/$name" ]]; then
+    local current
+    current=$(readlink "$SKILLS_DIR/$name" 2>/dev/null || echo "$SKILLS_DIR/$name")
+    if [[ "$current" == "$abs_path" ]]; then
+      echo "Already in pool: $name"
+      return 0
+    fi
+    echo "Already in pool under a different path: $name"
+    echo "  current: $current"
+    echo "  new:     $abs_path"
+    echo "Repoint it with: skill rm $name && skill add $abs_path"
+    return 1
   fi
 
   ln -s "$abs_path" "$SKILLS_DIR/$name"
@@ -114,7 +124,7 @@ add_skill() {
 
 remove_skill() {
   local name="$1"
-  if [[ ! -e "$SKILLS_DIR/$name" ]]; then
+  if [[ ! -e "$SKILLS_DIR/$name" && ! -L "$SKILLS_DIR/$name" ]]; then
     echo "Not in pool: $name"
     return 1
   fi
