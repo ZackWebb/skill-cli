@@ -45,6 +45,11 @@ fi
 generate_wrapper() {
   local skill_dir="$1"
   local out_dir="$2"
+  # Mode: "claude" passes upstream frontmatter through and uses
+  # disable-model-invocation; anything else (Codex/Copilot) keeps the
+  # neutered-description behavior, since neither implements the key and
+  # strict frontmatter validators reject unknown fields.
+  local mode="${3:-neutered}"
 
   # Compute the canonical wrapper location by resolving only the parent dir,
   # never following an existing symlink at out_dir itself (which could point
@@ -59,17 +64,52 @@ generate_wrapper() {
   local skill_md="$skill_dir/SKILL.md"
   [[ ! -f "$skill_md" ]] && return 1
 
+  # Read `name` only from the frontmatter block, never the body — a body line
+  # like `name: example` must not be mistaken for the skill name.
   local name
-  name=$(sed -n 's/^name: *//p' "$skill_md" | head -1)
+  name=$(awk '/^---$/{n++; next} n==1 && sub(/^name: */,""){print; exit} n>=2{exit}' "$skill_md")
   [[ -z "$name" ]] && name=$(basename "$skill_dir")
 
   [[ -L "$out_dir" ]] && rm -f "$out_dir"
   mkdir -p "$out_dir"
 
-  local body
-  body=$(awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$skill_md")
+  # Split frontmatter from body. When line 1 isn't `---`, the file has no
+  # frontmatter and the whole thing is body (the old awk split silently
+  # produced an empty body in that case).
+  local has_fm=0
+  [[ "$(head -n1 "$skill_md")" == "---" ]] && has_fm=1
 
-  cat > "$out_dir/SKILL.md" << EOF
+  local body
+  if [[ "$has_fm" -eq 1 ]]; then
+    body=$(awk 'f{print} /^---$/{n++; if(n==2)f=1}' "$skill_md")
+  else
+    body=$(cat "$skill_md")
+  fi
+
+  if [[ "$mode" == "claude" ]]; then
+    # Pass upstream frontmatter through verbatim, then:
+    #  - strip any top-level disable-model-invocation (avoid duplicating it),
+    #  - inject `name` only when upstream omits it,
+    #  - append disable-model-invocation: true.
+    local fm=""
+    [[ "$has_fm" -eq 1 ]] && fm=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$skill_md" | grep -v '^disable-model-invocation:' || true)
+    if ! printf '%s\n' "$fm" | grep -q '^name:'; then
+      if [[ -n "$fm" ]]; then
+        fm=$(printf 'name: %s\n%s' "$name" "$fm")
+      else
+        fm="name: $name"
+      fi
+    fi
+    {
+      echo "---"
+      [[ -n "$fm" ]] && printf '%s\n' "$fm"
+      echo "disable-model-invocation: true"
+      echo "---"
+      echo ""
+      printf '%s\n' "$body"
+    } > "$out_dir/SKILL.md"
+  else
+    cat > "$out_dir/SKILL.md" << EOF
 ---
 name: $name
 description: "Manual only."
@@ -77,6 +117,7 @@ description: "Manual only."
 
 $body
 EOF
+  fi
 
   for item in "$skill_dir"/*/; do
     [[ ! -d "$item" ]] && continue
@@ -143,11 +184,13 @@ while IFS= read -r name; do
   fi
 
   for target in "${TARGETS[@]}"; do
-    generate_wrapper "$real_dir" "$target/$name"
+    mode="neutered"
+    [[ -n "${CLAUDE_TARGET:-}" && "$target" == "$CLAUDE_TARGET" ]] && mode="claude"
+    generate_wrapper "$real_dir" "$target/$name" "$mode"
   done
   echo "  ✓ $name"
   synced=$((synced+1))
 done <<< "$ACTIVE"
 
 echo ""
-echo "✓ $synced skills synced with neutered descriptions."
+echo "✓ $synced skills synced (Claude: disable-model-invocation; others: neutered descriptions)."
