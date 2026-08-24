@@ -91,8 +91,17 @@ generate_wrapper() {
     #  - strip any top-level disable-model-invocation (avoid duplicating it),
     #  - inject `name` only when upstream omits it,
     #  - append disable-model-invocation: true.
+    # Skills named in MODEL_INVOCABLE (config.sh) keep upstream frontmatter
+    # verbatim — including upstream's own disable-model-invocation if it sets one.
+    local force_manual=1
+    for allowed in ${MODEL_INVOCABLE:-}; do
+      [[ "$allowed" == "$name" ]] && force_manual=0
+    done
     local fm=""
-    [[ "$has_fm" -eq 1 ]] && fm=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$skill_md" | grep -v '^disable-model-invocation:' || true)
+    [[ "$has_fm" -eq 1 ]] && fm=$(awk '/^---$/{n++; next} n==1{print} n>=2{exit}' "$skill_md")
+    if [[ "$force_manual" -eq 1 ]]; then
+      fm=$(printf '%s\n' "$fm" | grep -v '^disable-model-invocation:' || true)
+    fi
     if ! printf '%s\n' "$fm" | grep -q '^name:'; then
       if [[ -n "$fm" ]]; then
         fm=$(printf 'name: %s\n%s' "$name" "$fm")
@@ -103,7 +112,7 @@ generate_wrapper() {
     {
       echo "---"
       [[ -n "$fm" ]] && printf '%s\n' "$fm"
-      echo "disable-model-invocation: true"
+      [[ "$force_manual" -eq 1 ]] && echo "disable-model-invocation: true"
       echo "---"
       echo ""
       printf '%s\n' "$body"

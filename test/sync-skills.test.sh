@@ -45,6 +45,7 @@ mkdir -p "$XDG_CONFIG_HOME/skill-cli" "$POOL"
 cat > "$XDG_CONFIG_HOME/skill-cli/config.sh" << EOF
 SKILLS_DIR="$POOL"
 ACTIVE_FILE="$POOL/.active"
+MODEL_INVOCABLE="allowed allowed-manual"
 CLAUDE_TARGET="$CLAUDE_T"
 CODEX_TARGET="$CODEX_T"
 EOF
@@ -111,7 +112,32 @@ Example frontmatter field:
 name: not-the-skill-name
 EOF
 
-printf 'rich\nnoname\nplain\nshellbody\nbodyname\n' > "$POOL/.active"
+# --- Fixture 6: named in MODEL_INVOCABLE, upstream model-invocable — the
+# wrapper must NOT force disable-model-invocation.
+mkdir -p "$POOL/allowed"
+cat > "$POOL/allowed/SKILL.md" << 'EOF'
+---
+name: allowed
+description: Skill allowed to stay model-invocable.
+---
+
+Body of the allowed skill.
+EOF
+
+# --- Fixture 7: named in MODEL_INVOCABLE, but upstream itself sets
+# disable-model-invocation: true — upstream's own value must pass through.
+mkdir -p "$POOL/allowed-manual"
+cat > "$POOL/allowed-manual/SKILL.md" << 'EOF'
+---
+name: allowed-manual
+description: Upstream user-invoked skill.
+disable-model-invocation: true
+---
+
+Body of the allowed-manual skill.
+EOF
+
+printf 'rich\nnoname\nplain\nshellbody\nbodyname\nallowed\nallowed-manual\n' > "$POOL/.active"
 
 echo "== running sync-skills.sh =="
 "$SYNC" > "$ROOT/sync.log" 2>&1 || { echo "sync failed:"; cat "$ROOT/sync.log"; exit 1; }
@@ -144,6 +170,17 @@ assert_contains "$CLAUDE_PLAIN" "This file has no frontmatter." "claude: preserv
 assert_contains "$CLAUDE_PLAIN" "Just body text on two lines." "claude: preserves full body when no frontmatter"
 assert_contains "$CLAUDE_PLAIN" "name: plain" "claude: injects name when no frontmatter"
 assert_contains "$CLAUDE_PLAIN" "disable-model-invocation: true" "claude: appends disable-model-invocation when no frontmatter"
+
+echo "== MODEL_INVOCABLE allowlist =="
+CLAUDE_ALLOWED="$CLAUDE_T/allowed/SKILL.md"
+CLAUDE_ALLOWED_MANUAL="$CLAUDE_T/allowed-manual/SKILL.md"
+CODEX_ALLOWED="$CODEX_T/allowed/SKILL.md"
+assert_not_contains "$CLAUDE_ALLOWED" "disable-model-invocation" "claude: allowlisted skill stays model-invocable"
+assert_contains "$CLAUDE_ALLOWED" "description: Skill allowed to stay model-invocable." "claude: allowlisted skill keeps description"
+assert_contains "$CLAUDE_ALLOWED" "Body of the allowed skill." "claude: allowlisted skill keeps body"
+assert_contains "$CLAUDE_ALLOWED_MANUAL" "disable-model-invocation: true" "claude: allowlisted skill keeps upstream's own disable-model-invocation"
+assert_count "$CLAUDE_ALLOWED_MANUAL" "^disable-model-invocation:" 1 "claude: upstream key passes through exactly once"
+assert_contains "$CODEX_ALLOWED" "Manual only." "codex: allowlist does not affect neutered targets"
 
 echo "== Codex target: neutered description behavior unchanged =="
 assert_contains "$CODEX_RICH" "Manual only." "codex: keeps neutered description"
