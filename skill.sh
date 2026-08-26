@@ -37,7 +37,8 @@ usage() {
 Usage: skill <command> [args]
 
 Global skills (available everywhere):
-  ls                       Show pooled skills (● = active globally)
+  ls [-v|--verbose]        Show pooled skills (● = active globally);
+                           -v shows every scope (global + projects) at a glance
   on <name>                Activate a skill globally
   off <name>               Deactivate a skill globally
   add <path>               Stage a skill into the pool (symlink)
@@ -499,12 +500,58 @@ cmd_where() {
   done < <(skc_project_scopes)
 }
 
+# --- ls --verbose: every scope at a glance ---------------------------------
+ls_verbose() {
+  local pool_count group_count
+  pool_count=$(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) 2>/dev/null | wc -l | tr -d ' ')
+  group_count=$(skc_group_names | grep -c . || true)
+  echo "pool: $pool_count skill(s)    groups: $group_count"
+
+  local assigned_all="" scopes=() s
+  scopes+=("global")
+  while IFS= read -r s; do [[ -n "$s" ]] && scopes+=("$s"); done < <(skc_project_scopes | sort)
+
+  local scope entries resolved count name pol
+  for scope in "${scopes[@]}"; do
+    entries="$(skc_assign_get "$scope")"
+    resolved="$(skc_expand "$scope")"
+    if [[ -z "$resolved" ]]; then count=0; else count=$(grep -c . <<< "$resolved"); fi
+    printf '\n[%s]  %s skill(s)\n' "$(skc_scope_label "$scope")" "$count"
+    [[ -n "$entries" ]] && printf '  entries: %s\n' "$entries"
+    while IFS=$'\t' read -r name pol; do
+      [[ -z "$name" ]] && continue
+      assigned_all+="$name"$'\n'
+      if [[ "$pol" == "inherit" ]]; then
+        printf '    %s\n' "$name"
+      else
+        printf '    %s [%s]\n' "$name" "$pol"
+      fi
+    done <<< "$resolved"
+  done
+
+  # Orphans: pooled but not active/assigned in any scope.
+  local orphans="" entry
+  for entry in "$SKILLS_DIR"/*; do
+    [[ ! -d "$entry" && ! -L "$entry" ]] && continue
+    name=$(basename "$entry")
+    grep -qxF -- "$name" <<< "$assigned_all" || orphans+="$name "
+  done
+  orphans="$(echo $orphans)"
+  [[ -n "$orphans" ]] && printf '\n[unassigned in pool]  (staged, not active anywhere)\n  %s\n' "$orphans"
+}
+
 # --- dispatch ---------------------------------------------------------------
 cmd="${1:-}"
 shift || true
 
 case "$cmd" in
-  ls|list)   list_skills ;;
+  ls|list)
+    case "${1:-}" in
+      -v|--verbose) ls_verbose ;;
+      "")           list_skills ;;
+      *)            echo "Usage: skill ls [-v|--verbose]"; exit 1 ;;
+    esac
+    ;;
   on)        [[ -z "${1:-}" ]] && { echo "Usage: skill on <name>"; exit 1; }; activate "$1" ;;
   off)       [[ -z "${1:-}" ]] && { echo "Usage: skill off <name>"; exit 1; }; deactivate "$1" ;;
   add)       [[ -z "${1:-}" ]] && { echo "Usage: skill add <path>"; exit 1; }; add_skill "$1" ;;
