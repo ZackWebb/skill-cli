@@ -6,26 +6,44 @@ projects — from one declarative config.
 
 ## Model
 
-Three files under `~/.config/skill-cli/`:
+Four files under `~/.config/skill-cli/`:
 
 | File | Purpose | Portable? |
 |------|---------|-----------|
 | `config.sh` | Machine knobs: pool location, sync targets, `MODEL_INVOCABLE` | per-machine |
 | `groups.conf` | Named skill sets (no paths) — `name: skill skill …` | yes (commit it) |
 | `assignments.conf` | The router: `scope<TAB>entries`, `scope` = `global` or an absolute path | per-machine |
+| `last-targets` | Target paths the last sync wrote to, so a target later removed from `config.sh` can still be found and cleaned up | generated |
 
 The **pool** (`SKILLS_DIR`, default `~/.local/skills/enabled`) holds symlinks to
 skill sources. `assignments.conf` is the source of truth for what is active
 where; `sync` materializes it:
 
-- **global** → generated wrappers in `CLAUDE_TARGET` (and Codex/Copilot if set),
-  forced manual-only (`disable-model-invocation: true`) unless the skill is on
-  the `MODEL_INVOCABLE` allowlist. Historical behavior, unchanged.
-- **project** (`<dir>`) → each skill is **symlinked** into `<dir>/.claude/skills/`,
-  so it inherits the source's own invocation flag and updates when the source
-  changes. A per-skill `policy` override swaps a single entry for a generated
-  wrapper. A `.skill-cli-manifest` records what the CLI placed, so sync never
-  removes skills you added to a repo by hand.
+- **global** → generated wrappers in every configured target: `CLAUDE_TARGET`,
+  `CODEX_TARGET`, and `COPILOT_PLUGIN/skills`. Claude wrappers are forced
+  manual-only (`disable-model-invocation: true`) unless the skill is on the
+  `MODEL_INVOCABLE` allowlist, in which case upstream frontmatter — including
+  its own `disable-model-invocation` — passes through untouched. Codex and
+  Copilot get a `"Manual only."` description, except allowlisted skills on the
+  Codex target, which are copied verbatim so they stay model-invocable there too.
+- **project** (`<dir>`) → each skill is **symlinked** into `<dir>/.claude/skills/`
+  and `<dir>/.agents/skills/`, so it inherits the source's own invocation flag
+  and updates when the source changes. A per-skill `policy` override swaps a
+  single entry for a generated wrapper; Codex has no `disable-model-invocation`
+  equivalent, so on the `.agents` side only `manual` differs from `inherit`.
+
+### Targets are per-machine
+
+`config.sh` is the list of harnesses this machine writes to. Comment a target
+out or set it to `""` and it is skipped everywhere — global *and* project scopes
+— so no `.agents/skills` shows up in a repo on a Claude-only machine.
+
+Every directory the CLI writes to carries a `.skill-cli-manifest` recording what
+it placed there, and pruning only ever touches those entries. Skills you added
+to a repo by hand, or another tool's skills in a shared `~/.agents/skills`, are
+never removed. Disabling a target tears its managed entries down on the next
+sync — Copilot also loses its `plugin.json`, so it stops loading an empty
+plugin — while a directory with no manifest is not ours and is left alone.
 
 ## Commands
 
@@ -59,8 +77,9 @@ skill assign @ml-experimentation --target ~/dev/trade-calc
 skill policy python-api manual   --target ~/dev/trade-calc   # present but dormant here
 ```
 
-Now a Claude session in `~/dev/trade-calc` sees the 14 ML skills in its
-`.claude/skills`; other projects and the global scope are unaffected.
+Now a session in `~/dev/trade-calc` sees the 14 ML skills — in `.claude/skills`,
+and in `.agents/skills` if `CODEX_TARGET` is set on this machine. Other projects
+and the global scope are unaffected.
 
 > **Scope note:** Claude Code has no per-agent skill allowlist. Directory scoping
 > is the lever: skills in a repo's `.claude/skills` (and nested ones, loaded when
