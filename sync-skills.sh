@@ -64,6 +64,7 @@ fi
 #         claude-manual    always force disable-model-invocation: true
 #         claude-invocable strip any disable-model-invocation, never add one
 #         neutered         Codex/Copilot: name + "Manual only." description
+#         verbatim         preserve upstream SKILL.md exactly
 generate_wrapper() {
   local skill_dir="$1"
   local out_dir="$2"
@@ -96,7 +97,9 @@ generate_wrapper() {
     body=$(cat "$skill_md")
   fi
 
-  if [[ "$mode" == "neutered" ]]; then
+  if [[ "$mode" == "verbatim" ]]; then
+    cp "$skill_md" "$out_dir/SKILL.md"
+  elif [[ "$mode" == "neutered" ]]; then
     cat > "$out_dir/SKILL.md" << EOF
 ---
 name: $name
@@ -225,6 +228,11 @@ sync_global() {
     for target in "${TARGETS[@]}"; do
       mode="neutered"
       [[ -n "${CLAUDE_TARGET:-}" && "$target" == "$CLAUDE_TARGET" ]] && mode="claude-auto"
+      if [[ -n "${CODEX_TARGET:-}" && "$target" == "$CODEX_TARGET" ]]; then
+        for allowed in ${MODEL_INVOCABLE:-}; do
+          [[ "$allowed" == "$name" ]] && mode="verbatim"
+        done
+      fi
       generate_wrapper "$real_dir" "$target/$name" "$mode"
     done
     echo "  ✓ $name"
@@ -233,13 +241,9 @@ sync_global() {
   echo "  → global: $synced skill(s)"
 }
 
-# --- Project scope sync (Claude .claude/skills, symlink-inherit + policy) ----
+# --- Project scope sync (per-harness, gated on configured targets) ----------
 sync_project_scope() {
   local scope="$1"
-  local dir="$scope/.claude/skills"
-  local manifest="$dir/.skill-cli-manifest"
-
-  mkdir -p "$dir"
 
   # Resolve entries into parallel name/policy arrays.
   local -a names=() pols=()
@@ -257,48 +261,81 @@ sync_project_scope() {
     new_set+="$n"$'\n'
   done
 
-  # Prune previously-managed entries that are no longer assigned. Only names
-  # recorded in our manifest are ever removed — hand-added skills are untouched.
-  if [[ -f "$manifest" ]]; then
-    local old
-    while IFS= read -r old; do
-      [[ -z "$old" || "$old" == \#* ]] && continue
-      if ! grep -qxF -- "$old" <<< "$new_set"; then
-        rm -rf "$dir/$old"
-        echo "  removed: $old (from $(skc_scope_label "$scope"))"
-      fi
-    done < "$manifest"
-  fi
-
-  local i managed="" real_dir out
-  for ((i = 0; i < ${#names[@]}; i++)); do
-    name="${names[$i]}"
-    pol="${pols[$i]}"
-    real_dir=$(pool_real_dir "$name")
-    if [[ -z "$real_dir" ]]; then
-      echo "  ⚠ not in pool: $name ($(skc_scope_label "$scope"))"
-      continue
-    fi
-    if [[ ! -f "$real_dir/SKILL.md" ]]; then
-      echo "  skip (no SKILL.md): $name"
-      continue
-    fi
-    out="$dir/$name"
-    rm -rf "$out"
-    case "$pol" in
-      inherit)   ln -s "$real_dir" "$out" ;;
-      manual)    generate_wrapper "$real_dir" "$out" claude-manual ;;
-      invocable) generate_wrapper "$real_dir" "$out" claude-invocable ;;
-      *)         echo "  ⚠ unknown policy '$pol' for $name — treating as inherit"; ln -s "$real_dir" "$out" ;;
+  # Which harnesses this machine writes to. The config's target vars are the
+  # single source of truth: an empty/unset target disables that harness for
+  # project scopes exactly as it already does for the global sync.
+  local dir manifest harness old i managed real_dir out mode enabled
+  for harness in claude agents; do
+    enabled=0
+    case "$harness" in
+      claude) if [[ -n "${CLAUDE_TARGET:-}" ]]; then enabled=1; fi ;;
+      agents) if [[ -n "${CODEX_TARGET:-}" ]]; then enabled=1; fi ;;
     esac
-    managed+="$name"$'\n'
-    echo "  ✓ $name [$pol]"
-  done
 
-  {
-    echo "# skill-cli managed skills for this scope — do not edit"
-    printf '%s' "$managed"
-  } > "$manifest"
+    dir="$scope/.$harness/skills"
+    manifest="$dir/.skill-cli-manifest"
+
+    # Harness disabled here: tear down what we previously wrote (manifest
+    # entries only — hand-added skills survive) and move on without recreating
+    # the directory. Cleans up projects synced before the harness was disabled.
+    if [[ "$enabled" -eq 0 ]]; then
+      if [[ -f "$manifest" ]]; then
+        while IFS= read -r old; do
+          [[ -z "$old" || "$old" == \#* ]] && continue
+          rm -rf "$dir/$old"
+          echo "  removed: $old (.$harness/skills — harness disabled)"
+        done < "$manifest"
+        rm -f "$manifest"
+      fi
+      rmdir "$dir" 2>/dev/null || true
+      rmdir "$(dirname "$dir")" 2>/dev/null || true
+      continue
+    fi
+
+    mkdir -p "$dir"
+
+    # Only prune entries recorded in our manifest; hand-added skills survive.
+    if [[ -f "$manifest" ]]; then
+      while IFS= read -r old; do
+        [[ -z "$old" || "$old" == \#* ]] && continue
+        if ! grep -qxF -- "$old" <<< "$new_set"; then
+          rm -rf "$dir/$old"
+          echo "  removed: $old (from .$harness/skills)"
+        fi
+      done < "$manifest"
+    fi
+
+    managed=""
+    for ((i = 0; i < ${#names[@]}; i++)); do
+      name="${names[$i]}"
+      pol="${pols[$i]}"
+      real_dir=$(pool_real_dir "$name")
+      [[ -z "$real_dir" ]] && { echo "  ⚠ not in pool: $name"; continue; }
+      [[ ! -f "$real_dir/SKILL.md" ]] && { echo "  skip (no SKILL.md): $name"; continue; }
+      out="$dir/$name"
+      rm -rf "$out"
+      if [[ "$harness" == "agents" ]]; then
+        case "$pol" in
+          manual) generate_wrapper "$real_dir" "$out" neutered ;;
+          *)      ln -s "$real_dir" "$out" ;;
+        esac
+      else
+        case "$pol" in
+          inherit)   ln -s "$real_dir" "$out" ;;
+          manual)    generate_wrapper "$real_dir" "$out" claude-manual ;;
+          invocable) generate_wrapper "$real_dir" "$out" claude-invocable ;;
+          *)         ln -s "$real_dir" "$out" ;;
+        esac
+      fi
+      managed+="$name"$'\n'
+      echo "  ✓ $name [$pol] → .$harness/skills"
+    done
+
+    {
+      echo "# skill-cli managed skills for this scope — do not edit"
+      printf '%s' "$managed"
+    } > "$manifest"
+  done
   echo "  → $(skc_scope_label "$scope"): ${#names[@]} skill(s)"
 }
 

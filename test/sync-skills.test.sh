@@ -175,12 +175,20 @@ echo "== MODEL_INVOCABLE allowlist =="
 CLAUDE_ALLOWED="$CLAUDE_T/allowed/SKILL.md"
 CLAUDE_ALLOWED_MANUAL="$CLAUDE_T/allowed-manual/SKILL.md"
 CODEX_ALLOWED="$CODEX_T/allowed/SKILL.md"
+CODEX_ALLOWED_MANUAL="$CODEX_T/allowed-manual/SKILL.md"
 assert_not_contains "$CLAUDE_ALLOWED" "disable-model-invocation" "claude: allowlisted skill stays model-invocable"
 assert_contains "$CLAUDE_ALLOWED" "description: Skill allowed to stay model-invocable." "claude: allowlisted skill keeps description"
 assert_contains "$CLAUDE_ALLOWED" "Body of the allowed skill." "claude: allowlisted skill keeps body"
 assert_contains "$CLAUDE_ALLOWED_MANUAL" "disable-model-invocation: true" "claude: allowlisted skill keeps upstream's own disable-model-invocation"
 assert_count "$CLAUDE_ALLOWED_MANUAL" "^disable-model-invocation:" 1 "claude: upstream key passes through exactly once"
-assert_contains "$CODEX_ALLOWED" "Manual only." "codex: allowlist does not affect neutered targets"
+
+# The allowlist spans both harnesses: an allowlisted skill is copied to the
+# Codex target verbatim — real description, upstream frontmatter intact — so it
+# stays auto-invocable there too. Anything not on the list is still neutered.
+assert_not_contains "$CODEX_ALLOWED" "Manual only." "codex: allowlisted skill is not neutered"
+assert_contains "$CODEX_ALLOWED" "description: Skill allowed to stay model-invocable." "codex: allowlisted skill keeps its real description"
+assert_contains "$CODEX_ALLOWED" "Body of the allowed skill." "codex: allowlisted skill keeps body"
+assert_contains "$CODEX_ALLOWED_MANUAL" "disable-model-invocation: true" "codex: verbatim passes upstream's own disable-model-invocation through"
 
 echo "== Codex target: neutered description behavior unchanged =="
 assert_contains "$CODEX_RICH" "Manual only." "codex: keeps neutered description"

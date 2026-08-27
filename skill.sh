@@ -17,10 +17,13 @@ ACTIVE_FILE="$SKILLS_DIR/.active"
 # Everything else gets disable-model-invocation: true forced on Claude sync.
 MODEL_INVOCABLE=""
 
-# Sync targets. Comment out or set to "" to disable on this machine.
+# Sync targets — this is the per-machine list of harnesses to write to.
+# Comment out or set to "" to disable one here. A disabled target is skipped
+# globally AND in project scopes (no .claude/ or .agents/ dir is created for
+# it), and the next sync tears down anything we previously wrote there.
 CLAUDE_TARGET="$HOME/.claude/skills"
-# CODEX_TARGET="$HOME/.config/codex/skills"
-# COPILOT_PLUGIN="$HOME/.copilot/installed-plugins/local/personal-skills"
+CODEX_TARGET="$HOME/.agents/skills"
+COPILOT_PLUGIN="$HOME/.copilot/installed-plugins/local/personal-skills"
 DEFAULTS
   echo "Created default config at $CONFIG_FILE — review and edit for this machine."
 fi
