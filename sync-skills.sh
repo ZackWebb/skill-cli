@@ -241,7 +241,7 @@ sync_global() {
   echo "  → global: $synced skill(s)"
 }
 
-# --- Project scope sync (Claude + Codex, symlink-inherit + policy) -----------
+# --- Project scope sync (per-harness, gated on configured targets) ----------
 sync_project_scope() {
   local scope="$1"
 
@@ -261,10 +261,37 @@ sync_project_scope() {
     new_set+="$n"$'\n'
   done
 
-  local dir manifest harness old i managed real_dir out mode
+  # Which harnesses this machine writes to. The config's target vars are the
+  # single source of truth: an empty/unset target disables that harness for
+  # project scopes exactly as it already does for the global sync.
+  local dir manifest harness old i managed real_dir out mode enabled
   for harness in claude agents; do
+    enabled=0
+    case "$harness" in
+      claude) if [[ -n "${CLAUDE_TARGET:-}" ]]; then enabled=1; fi ;;
+      agents) if [[ -n "${CODEX_TARGET:-}" ]]; then enabled=1; fi ;;
+    esac
+
     dir="$scope/.$harness/skills"
     manifest="$dir/.skill-cli-manifest"
+
+    # Harness disabled here: tear down what we previously wrote (manifest
+    # entries only — hand-added skills survive) and move on without recreating
+    # the directory. Cleans up projects synced before the harness was disabled.
+    if [[ "$enabled" -eq 0 ]]; then
+      if [[ -f "$manifest" ]]; then
+        while IFS= read -r old; do
+          [[ -z "$old" || "$old" == \#* ]] && continue
+          rm -rf "$dir/$old"
+          echo "  removed: $old (.$harness/skills — harness disabled)"
+        done < "$manifest"
+        rm -f "$manifest"
+      fi
+      rmdir "$dir" 2>/dev/null || true
+      rmdir "$(dirname "$dir")" 2>/dev/null || true
+      continue
+    fi
+
     mkdir -p "$dir"
 
     # Only prune entries recorded in our manifest; hand-added skills survive.
