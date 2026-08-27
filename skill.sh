@@ -19,8 +19,8 @@ MODEL_INVOCABLE=""
 
 # Sync targets. Comment out or set to "" to disable on this machine.
 CLAUDE_TARGET="$HOME/.claude/skills"
-# CODEX_TARGET="$HOME/.config/codex/skills"
-# COPILOT_PLUGIN="$HOME/.copilot/installed-plugins/local/personal-skills"
+CODEX_TARGET="$HOME/.agents/skills"
+COPILOT_PLUGIN="$HOME/.copilot/installed-plugins/local/personal-skills"
 DEFAULTS
   echo "Created default config at $CONFIG_FILE — review and edit for this machine."
 fi
