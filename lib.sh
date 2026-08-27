@@ -18,6 +18,10 @@
 SKC_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/skill-cli"
 GROUPS_FILE="$SKC_CONFIG_DIR/groups.conf"
 ASSIGN_FILE="$SKC_CONFIG_DIR/assignments.conf"
+# Target paths written by the last global sync. A target that later drops out
+# of the config is no longer nameable from the config alone, so this is how we
+# find it again in order to tear it down.
+TARGETS_FILE="$SKC_CONFIG_DIR/last-targets"
 
 # ---- scope helpers ---------------------------------------------------------
 
