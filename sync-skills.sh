@@ -174,12 +174,57 @@ pool_real_dir() {
   python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "$link"
 }
 
+# Entries recorded in a manifest, comments and blanks stripped.
+manifest_entries() {
+  [[ -f "$1" ]] || return 0
+  grep -v -e '^#' -e '^$' -- "$1" || true
+}
+
+# Tear down targets that the last sync wrote to but the config no longer names.
+#
+# Only manifest-recorded entries are removed, so a directory we never wrote to
+# is left completely alone: no manifest means not ours. That is what keeps a
+# typo'd or newly-unset target var from destroying a real skills directory, and
+# what keeps us off a shared ~/.agents/skills another tool owns.
+teardown_stale_targets() {
+  [[ -f "$TARGETS_FILE" ]] || return 0
+  local current old manifest entry root
+  current=$(printf '%s\n' "$@")
+  while IFS= read -r old; do
+    [[ -z "$old" || "$old" == \#* ]] && continue
+    grep -qxF -- "$old" <<< "$current" && continue
+    manifest="$old/.skill-cli-manifest"
+    [[ -f "$manifest" ]] || continue
+    while IFS= read -r entry; do
+      rm -rf "$old/$entry"
+      echo "  removed: $entry (from ${old/#$HOME/~} — target disabled)"
+    done < <(manifest_entries "$manifest")
+    rm -f "$manifest"
+    rmdir "$old" 2>/dev/null || true
+    # A Copilot skills dir sits inside a plugin root. Once the skills dir is
+    # gone, drop the plugin registration too, so Copilot stops loading an empty
+    # plugin. If hand-added skills kept the dir alive, leave it registered.
+    root=$(dirname "$old")
+    if [[ ! -d "$old" && -f "$root/.claude-plugin/plugin.json" ]]; then
+      rm -f "$root/.claude-plugin/plugin.json"
+      rmdir "$root/.claude-plugin" 2>/dev/null || true
+      rmdir "$root" 2>/dev/null || true
+      echo "  removed: plugin manifest (${root/#$HOME/~} — target disabled)"
+    fi
+  done < "$TARGETS_FILE"
+}
+
 # --- Global sync (multi-target, historical behavior) ------------------------
 sync_global() {
   local -a TARGETS=()
   [[ -n "${CLAUDE_TARGET:-}" ]] && TARGETS+=("$CLAUDE_TARGET")
   [[ -n "${CODEX_TARGET:-}" ]]  && TARGETS+=("$CODEX_TARGET")
   [[ -n "${COPILOT_PLUGIN:-}" ]] && TARGETS+=("$COPILOT_PLUGIN/skills")
+
+  # Runs before the no-targets bail: disabling every target must still clean up.
+  teardown_stale_targets "${TARGETS[@]:-}"
+  mkdir -p "$SKC_CONFIG_DIR"
+  printf '%s\n' "${TARGETS[@]:-}" | grep -v '^$' > "$TARGETS_FILE" || true
 
   if [[ ${#TARGETS[@]} -eq 0 ]]; then
     echo "  (no global sync targets configured — skipping global)"
@@ -194,23 +239,19 @@ sync_global() {
     mkdir -p "$t"
   done
 
-  # Prune target dirs no longer in the global set.
-  local target item item_name
+  # Prune only what we recorded as ours. A target with no manifest yet has
+  # nothing to prune — the manifest written below picks it up from here on.
+  local target item_name
   for target in "${TARGETS[@]}"; do
-    for item in "$target"/*; do
-      [[ ! -e "$item" && ! -L "$item" ]] && continue
-      item_name=$(basename "$item")
-      [[ "$item_name" == ".claude" ]] && continue
-      [[ "$item_name" == ".system" ]] && continue
-      [[ "$item_name" == "hooks" ]] && continue
+    while IFS= read -r item_name; do
       if ! grep -qxF -- "$item_name" <<< "$names"; then
-        rm -rf "$item"
+        rm -rf "$target/$item_name"
         echo "  removed: $item_name (from $(basename $(dirname "$target")))"
       fi
-    done
+    done < <(manifest_entries "$target/.skill-cli-manifest")
   done
 
-  local synced=0 name real_dir mode
+  local synced=0 name real_dir mode managed=""
   while IFS= read -r name; do
     [[ -z "$name" ]] && continue
     real_dir=$(pool_real_dir "$name")
@@ -227,9 +268,17 @@ sync_global() {
       [[ -n "${CLAUDE_TARGET:-}" && "$target" == "$CLAUDE_TARGET" ]] && mode="claude-auto"
       generate_wrapper "$real_dir" "$target/$name" "$mode"
     done
+    managed+="$name"$'\n'
     echo "  ✓ $name"
     synced=$((synced + 1))
   done <<< "$names"
+
+  for target in "${TARGETS[@]}"; do
+    {
+      echo "# skill-cli managed skills for this target — do not edit"
+      printf '%s' "$managed"
+    } > "$target/.skill-cli-manifest"
+  done
   echo "  → global: $synced skill(s)"
 }
 
